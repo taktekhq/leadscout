@@ -1,0 +1,20 @@
+{
+  "businesses": [
+    {
+      "name": "Example Dental Clinic",
+      "website": "https://example-dental.test",
+      "sector": "dental",
+      "city": "Beirut",
+      "country": "Lebanon",
+      "contact": {"emails": ["info@example-dental.test"], "phones": ["+961 1 234567"]}
+    },
+    {
+      "name": "Sunrise Hair Salon",
+      "website": "",
+      "sector": "salon",
+      "city": "Beirut",
+      "country": "Lebanon",
+      "contact": {"emails": [], "phones": ["+961 70 112233"]}
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leadscout"
+version = "0.1.0"
+description = "Find small-business leads from OpenStreetMap or a local list, and audit their websites"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Taktek and Nizar Mahmoud" }]
+requires-python = ">=3.9"
+dependencies = [
+    "certifi>=2024.0.0",  # fixes CERTIFICATE_VERIFY_FAILED on Python installs with no system CA bundle
+]
+
+[project.scripts]
+leadscout = "leadscout.cli:main"
+
+[tool.setuptools]
+packages = ["leadscout"]
