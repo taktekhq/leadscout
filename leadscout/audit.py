@@ -29,7 +29,7 @@ _PARKED_MARKERS = (
     "this web page is parked", "courtesy page",
 )
 
-_WHATSAPP_RE = re.compile(r"(wa\.me/|api\.whatsapp\.com)", re.I)
+_WHATSAPP_RE = re.compile(r"(wa\.me/|wa\.link/|api\.whatsapp\.com|web\.whatsapp\.com|whatsapp://|whatsapp-chat|elfsight\.com|joinchat|click-to-chat)", re.I)
 _MAPS_RE = re.compile(r"(google\.[a-z.]+/maps|maps\.app\.goo\.gl|goo\.gl/maps)", re.I)
 _BOOKING_RE = re.compile(
     r"(calendly\.com|book\.?now|booking\.|fresha\.com|setmore\.com|acuityscheduling\.com|"
