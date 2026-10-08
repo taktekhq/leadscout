@@ -80,3 +80,11 @@ class TestElementsToRecords(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebsiteOnlyTest(unittest.TestCase):
+    def test_website_only_adds_filter(self):
+        from leadscout.overpass import BBox, Tag, build_query
+        q = build_query([Tag.parse("amenity=dentist")], BBox(1, 2, 3, 4), website_only=True)
+        self.assertIn('[~"^(website|contact:website|url)$"~"."]', q)
+        self.assertNotIn("website", build_query([Tag.parse("amenity=dentist")], BBox(1, 2, 3, 4)))

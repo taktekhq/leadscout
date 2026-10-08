@@ -46,7 +46,7 @@ def _parse_kv_list(pairs: Optional[List[str]]) -> dict:
 def cmd_find_overpass(args: argparse.Namespace) -> None:
     records = overpass.find(
         tags=args.tag, area=args.area, bbox=args.bbox,
-        user_agent=args.user_agent, category=args.category or "",
+        user_agent=args.user_agent, category=args.category or "", website_only=args.website_only,
     )
     write_csv(records, LEAD_FIELDS, args.out)
     print(f"Wrote {len(records)} leads to {args.out}", file=sys.stderr)
@@ -113,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     loc.add_argument("--area", help='place name, e.g. "Beirut, Lebanon" (resolved via Nominatim)')
     loc.add_argument("--bbox", help="south,west,north,east")
     fo.add_argument("--category", default="", help="label to put in the category column")
+    fo.add_argument("--website-only", action="store_true", help="only places that publish a website tag")
     fo.add_argument("--out", required=True, help="output CSV path")
     fo.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     fo.set_defaults(func=cmd_find_overpass)

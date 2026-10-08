@@ -72,14 +72,15 @@ def resolve_area_bbox(area: str, user_agent: str = DEFAULT_USER_AGENT,
     return BBox(south=south, west=west, north=north, east=east)
 
 
-def build_query(tags: Sequence[Tag], bbox: BBox, timeout_s: int = 60) -> str:
+def build_query(tags: Sequence[Tag], bbox: BBox, timeout_s: int = 60, website_only: bool = False) -> str:
     """Build an Overpass QL query matching any of the given tags inside bbox."""
     bb = bbox.as_overpass()
     clauses = []
     for t in tags:
         selector = f'"{t.key}"="{t.value}"' if t.value is not None else f'"{t.key}"'
+        extra = '[~"^(website|contact:website|url)$"~"."]' if website_only else ""
         for kind in ("node", "way", "relation"):
-            clauses.append(f'  {kind}[{selector}]({bb});')
+            clauses.append(f'  {kind}[{selector}]{extra}({bb});')
     body = "\n".join(clauses)
     return f"[out:json][timeout:{timeout_s}];\n(\n{body}\n);\nout center tags;"
 
@@ -152,12 +153,13 @@ def elements_to_records(data: dict, category: str = "") -> List[dict]:
 
 
 def find(tags: Sequence[str], area: Optional[str] = None, bbox: Optional[str] = None,
-         user_agent: str = DEFAULT_USER_AGENT, category: str = "") -> List[dict]:
+         user_agent: str = DEFAULT_USER_AGENT, category: str = "",
+         website_only: bool = False) -> List[dict]:
     """High-level entry point: tags as 'key=value' strings, an area name or a bbox."""
     if bool(area) == bool(bbox):
         raise ValueError("pass exactly one of area or bbox")
     parsed_tags = [Tag.parse(t) for t in tags]
     box = resolve_area_bbox(area, user_agent=user_agent) if area else BBox.parse(bbox)
-    query = build_query(parsed_tags, box)
+    query = build_query(parsed_tags, box, website_only=website_only)
     data = run_query(query, user_agent=user_agent)
     return elements_to_records(data, category=category)
