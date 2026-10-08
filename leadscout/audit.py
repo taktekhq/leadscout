@@ -71,9 +71,13 @@ class _PageParts(html.parser.HTMLParser):
         self._in_ldjson = False
         self.links: List[str] = []
         self.lang = ""
+        self.visible_chars = 0
+        self._skip = 0
 
     def handle_starttag(self, tag, attrs):
         attrs_d = dict(attrs)
+        if tag in ("script", "style", "noscript"):
+            self._skip += 1
         if tag == "html":
             self.lang = (attrs_d.get("lang") or "").lower()
         if tag == "title":
@@ -90,12 +94,16 @@ class _PageParts(html.parser.HTMLParser):
             self.links.append(attrs_d["href"])
 
     def handle_endtag(self, tag):
+        if tag in ("script", "style", "noscript") and self._skip:
+            self._skip -= 1
         if tag == "title":
             self._in_title = False
         elif tag == "script":
             self._in_ldjson = False
 
     def handle_data(self, data):
+        if not self._skip:
+            self.visible_chars += len(data.strip())
         if self._in_title:
             self.title_parts.append(data)
         if self._in_ldjson:
@@ -120,6 +128,7 @@ class AuditResult:
     load_time_ms: float = 0.0
     has_sitemap: bool = False
     lang: str = ""
+    visible_text_chars: int = 0
     emails: str = ""
     whatsapp_number: str = ""
     phones: str = ""
@@ -217,6 +226,10 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
                     r.has_jsonld_localbusiness = True
 
     r.lang = parser.lang
+    r.visible_text_chars = parser.visible_chars
+    if "under maintenance" in text_lower or "coming soon" in r.title.lower():
+        r.broken_or_parked = True
+        r.problems.append("Site shows an under-maintenance / coming-soon page.")
     r.emails = ", ".join(_find_emails(text, parser.links))
     wa = _WA_NUM_RE.search(text)
     r.whatsapp_number = wa.group(1) if wa else ""

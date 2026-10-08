@@ -29,7 +29,7 @@ AUDIT_FIELDS = (
     "url", "fetched", "https", "status", "mobile_viewport", "title", "meta_description",
     "has_jsonld_localbusiness", "has_maps_link", "has_whatsapp_link", "has_booking_link",
     "broken_or_parked", "page_weight_kb", "load_time_ms", "has_sitemap", "robots_disallowed",
-    "lang", "emails", "whatsapp_number", "phones", "instagram", "error", "problems",
+    "lang", "visible_text_chars", "emails", "whatsapp_number", "phones", "instagram", "error", "problems",
 )
 
 
