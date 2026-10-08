@@ -264,3 +264,31 @@ class HttpsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CandidateSelectionTest(unittest.TestCase):
+    def test_blog_posts_and_listings_are_not_contact_pages(self):
+        anchors = [("/blog/all-about-easter-traditions-in-the-world", "Read more"),
+                   ("/property/Sabtiyeh/abc/Prime-Location", "Prime location"),
+                   ("/contact", "Contact"), ("/about-us", "About us"), ("/find-us", "Where"),
+                   ("/news", "Facts about pomegranates and other long headline text here")]
+        got = audit._candidate_pages("http://x.test/", anchors, [])
+        self.assertEqual(got, ["http://x.test/contact", "http://x.test/find-us", "http://x.test/about-us"])
+
+    def test_contact_pages_rank_before_about_and_duplicates_collapse(self):
+        anchors = [("/about", "About"), ("/contact/", "Contact"), ("//contact", "Contact"), ("/Contact", "x")]
+        got = audit._candidate_pages("http://x.test/", anchors, ["http://x.test/book-online"])
+        self.assertEqual(got[:2], ["http://x.test/contact/", "http://x.test/Contact"])
+        self.assertEqual(got[-1], "http://x.test/about")
+
+    def test_link_text_can_qualify_a_generic_url(self):
+        got = audit._candidate_pages("http://x.test/", [("/p?id=7", "Book an appointment")], [])
+        self.assertEqual(got, ["http://x.test/p?id=7"])
+
+    def test_redirect_to_page_already_checked_is_not_counted_twice(self):
+        r, _ = run({
+            "/": (page('<a href="/contact">Contact</a><a href="/contact-us/">Contact again</a>'), 200),
+            "/contact": (page("c1"), 200),
+            "/contact-us/": (page("c2"), 200),
+        })
+        self.assertEqual(r.pages_checked, ["/", "/contact", "/contact-us/"])

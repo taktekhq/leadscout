@@ -152,9 +152,6 @@ class _PageParts(html.parser.HTMLParser):
 MAX_PAGES = 8
 PAGE_DELAY = 0.3  # seconds between page fetches on one site
 
-_PAGE_KEYWORDS_RE = re.compile(
-    r"(contact|book|appointment|reserv|location|find[-_ ]?us|about|visit|direction|"
-    r"rendez-vous|nous[-_ ]joindre|a-propos|\u062d\u062c\u0632|\u0627\u062a\u0635\u0644|\u0645\u0648\u0642\u0639)", re.I)
 _SKIP_EXT = (".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".zip", ".doc", ".docx",
              ".xls", ".xlsx", ".mp4", ".mp3", ".css", ".js", ".xml", ".ico")
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
@@ -266,12 +263,23 @@ def _path(url: str) -> str:
     return (p.path or "/") + (("?" + p.query) if p.query else "")
 
 
+_RANK = (
+    (re.compile(r"(contact|book|appointment|reserv|rendez-vous|nous[-_ ]joindre|\u062d\u062c\u0632|\u0627\u062a\u0635\u0644)", re.I), 0),
+    (re.compile(r"(location|find[-_ ]?us|visit|direction|\u0645\u0648\u0642\u0639)", re.I), 1),
+    (re.compile(r"(about|a-propos)", re.I), 2),
+)
+
+
 def _candidate_pages(home_url: str, anchors: List[tuple], sitemap_urls: List[str]) -> List[str]:
-    """Same-site URLs worth a look: home-page links first, then sitemap entries."""
+    """Same-site URLs worth a look, most useful first (contact/booking, then location, then about).
+
+    Only short, page-like paths count: a blog post called "all-about-easter" or a
+    listing called "prime-location-in-dubai" is not the page we are after.
+    """
     base_host = _host(home_url)
-    home_key = home_url.rstrip("/")
-    out: List[str] = []
-    seen = {home_key}
+    h = urlparse(home_url)
+    seen = {re.sub(r"/+", "/", h.path or "/").rstrip("/")}
+    found: List[tuple] = []  # (rank, depth, order, url)
 
     def consider(raw: str, text: str):
         raw = (raw or "").strip()
@@ -281,23 +289,28 @@ def _candidate_pages(home_url: str, anchors: List[tuple], sitemap_urls: List[str
         p = urlparse(full)
         if p.scheme not in ("http", "https") or _host(full) != base_host:
             return
-        if p.path.lower().endswith(_SKIP_EXT):
+        path = re.sub(r"/+", "/", p.path or "/")
+        if path.lower().endswith(_SKIP_EXT):
             return
-        if not (_PAGE_KEYWORDS_RE.search(p.path) or _PAGE_KEYWORDS_RE.search(text or "")):
-            return
-        key = full.rstrip("/")
+        segs = [x for x in path.split("/") if x]
+        page_like = len(segs) <= 3 and len(path) <= 48 and all(x.count("-") <= 3 for x in segs)
+        label = text if len(text or "") <= 40 else ""
+        hay = path if page_like else ""
+        rank = next((r for rx, r in _RANK if rx.search(hay) or rx.search(label)), None)
+        if rank is None or (not page_like and rank != 0):
+            return  # deep paths (listings, posts) only count when the link text says contact/book
+        key = path.rstrip("/")
         if key in seen:
             return
         seen.add(key)
         # fetch over the scheme/host the home page actually answered on
-        h = urlparse(home_url)
-        out.append(f"{h.scheme}://{h.netloc}{p.path or '/'}" + (f"?{p.query}" if p.query else ""))
+        found.append((rank, len(segs), len(found), f"{h.scheme}://{h.netloc}{path}" + (f"?{p.query}" if p.query else "")))
 
     for href, text in anchors:
         consider(href, text)
     for u in sitemap_urls:
         consider(u, "")
-    return out
+    return [u for *_, u in sorted(found)]
 
 
 def _sitemap_locs(urls: List[str], ua: str, timeout: float, max_children: int = 2) -> tuple:
@@ -485,6 +498,9 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
                 sub.feed(res.text())
             except Exception:
                 pass
+            fkey = re.sub(r"/+", "/", _path(res.final_url)).rstrip("/") or "/"
+            if fkey in {re.sub(r"/+", "/", x).rstrip("/") or "/" for x in r.pages_checked}:
+                continue  # a redirect landed on a page we already have
             pages.append((res.final_url, res.text(), sub))
             r.pages_checked.append(_path(res.final_url))
 
