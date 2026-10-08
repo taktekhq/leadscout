@@ -38,6 +38,7 @@ _BOOKING_RE = re.compile(
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+_AT_RE = re.compile(r"@")
 _WA_NUM_RE = re.compile(r"(?:wa\.me/|phone=)\+?(\d{7,15})", re.I)
 _BAD_EMAIL_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
 _BAD_EMAIL_DOMAINS = ("sentry.io", "example.com", "wixpress.com", "domain.com", "email.com")
@@ -48,7 +49,12 @@ def _find_emails(text: str, links: List[str]) -> List[str]:
     for href in links:
         if href.lower().startswith("mailto:"):
             found += _EMAIL_RE.findall(href[7:].split("?")[0])
-    found += _EMAIL_RE.findall(text)
+    # Anchor on '@' instead of scanning the whole page with a leading
+    # [A-Za-z0-9...]+ (quadratic on big base64/minified blobs).
+    for m in _AT_RE.finditer(text):
+        found += _EMAIL_RE.findall(text[max(0, m.start() - 64):m.end() + 100])
+        if len(found) > 20:
+            break
     out: List[str] = []
     for e in found:
         e = e.strip(".").lower()
