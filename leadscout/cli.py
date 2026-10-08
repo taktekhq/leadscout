@@ -29,7 +29,7 @@ AUDIT_FIELDS = (
     "url", "fetched", "https", "status", "mobile_viewport", "title", "meta_description",
     "has_jsonld_localbusiness", "has_maps_link", "has_whatsapp_link", "has_booking_link",
     "broken_or_parked", "page_weight_kb", "load_time_ms", "has_sitemap", "robots_disallowed",
-    "error", "problems",
+    "lang", "emails", "whatsapp_number", "phones", "instagram", "error", "problems",
 )
 
 
@@ -72,19 +72,27 @@ def cmd_audit(args: argparse.Namespace) -> None:
 
 
 def cmd_audit_csv(args: argparse.Namespace) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
     rows = read_csv(args.input)
-    out_rows = []
-    for i, row in enumerate(rows):
+
+    def work(item):
+        i, row = item
         url = row.get("website") or row.get("url") or ""
         result = audit_site(url, user_agent=args.user_agent, timeout=args.timeout,
-                             check_sitemap=not args.no_sitemap)
-        merged = dict(row)
-        merged.update(result.as_dict())
-        out_rows.append(merged)
-        print(f"[{i + 1}/{len(rows)}] {row.get('name', url)}: "
-              f"{'OK' if result.fetched else 'FAILED'}", file=sys.stderr)
+                            check_sitemap=not args.no_sitemap)
         if args.delay:
             time.sleep(args.delay)
+        merged = dict(row)
+        merged.update(result.as_dict())
+        print(f"[{i + 1}/{len(rows)}] {row.get('name', url)}: "
+              f"{'OK' if result.fetched else 'FAILED'}", file=sys.stderr)
+        return merged
+
+    # Each site is audited by one worker, so a given host never sees parallel
+    # requests; --workers only spreads load across different hosts.
+    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+        out_rows = list(ex.map(work, enumerate(rows)))
     fields = list(rows[0].keys()) if rows else []
     for f in AUDIT_FIELDS:
         if f not in fields:
@@ -132,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--out", required=True)
     ac.add_argument("--timeout", type=float, default=10.0)
     ac.add_argument("--delay", type=float, default=1.0, help="seconds to sleep between sites")
+    ac.add_argument("--workers", type=int, default=1, help="sites audited in parallel (default 1)")
     ac.add_argument("--no-sitemap", action="store_true")
     ac.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     ac.set_defaults(func=cmd_audit_csv)

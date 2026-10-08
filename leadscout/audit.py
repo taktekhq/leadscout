@@ -37,6 +37,27 @@ _BOOKING_RE = re.compile(
 )
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+_WA_NUM_RE = re.compile(r"(?:wa\.me/|phone=)\+?(\d{7,15})", re.I)
+_BAD_EMAIL_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
+_BAD_EMAIL_DOMAINS = ("sentry.io", "example.com", "wixpress.com", "domain.com", "email.com")
+
+
+def _find_emails(text: str, links: List[str]) -> List[str]:
+    found: List[str] = []
+    for href in links:
+        if href.lower().startswith("mailto:"):
+            found += _EMAIL_RE.findall(href[7:].split("?")[0])
+    found += _EMAIL_RE.findall(text)
+    out: List[str] = []
+    for e in found:
+        e = e.strip(".").lower()
+        if e.endswith(_BAD_EMAIL_SUFFIX) or e.split("@")[1] in _BAD_EMAIL_DOMAINS or e in out:
+            continue
+        out.append(e)
+    return out[:3]
+
+
 class _PageParts(html.parser.HTMLParser):
     """Pull out the bits of HTML we care about without a full DOM."""
 
@@ -49,9 +70,12 @@ class _PageParts(html.parser.HTMLParser):
         self.ldjson_blobs: List[str] = []
         self._in_ldjson = False
         self.links: List[str] = []
+        self.lang = ""
 
     def handle_starttag(self, tag, attrs):
         attrs_d = dict(attrs)
+        if tag == "html":
+            self.lang = (attrs_d.get("lang") or "").lower()
         if tag == "title":
             self._in_title = True
         elif tag == "meta":
@@ -95,6 +119,11 @@ class AuditResult:
     page_weight_kb: float = 0.0
     load_time_ms: float = 0.0
     has_sitemap: bool = False
+    lang: str = ""
+    emails: str = ""
+    whatsapp_number: str = ""
+    phones: str = ""
+    instagram: str = ""
     robots_disallowed: bool = False
     error: str = ""
     problems: List[str] = field(default_factory=list)
@@ -186,6 +215,21 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
                 types = t if isinstance(t, list) else [t]
                 if any("LocalBusiness" in str(x) or str(x) in _LOCAL_BUSINESS_SUBTYPES for x in types):
                     r.has_jsonld_localbusiness = True
+
+    r.lang = parser.lang
+    r.emails = ", ".join(_find_emails(text, parser.links))
+    wa = _WA_NUM_RE.search(text)
+    r.whatsapp_number = wa.group(1) if wa else ""
+    tels = []
+    for href in parser.links:
+        if href.lower().startswith("tel:"):
+            t = re.sub(r"[^\d+]", "", href[4:])
+            if t and t not in tels:
+                tels.append(t)
+    r.phones = ", ".join(tels[:3])
+    ig = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", text)
+    if ig and ig.group(1).lower() not in ("p", "explore", "accounts", "reel", "sharer"):
+        r.instagram = "https://www.instagram.com/" + ig.group(1)
 
     all_text_for_links = text  # also scan raw HTML so e.g. onclick-only buttons still count
     r.has_whatsapp_link = bool(_WHATSAPP_RE.search(all_text_for_links)) or any(

@@ -147,3 +147,21 @@ class TestAuditSite(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContactExtractionTest(unittest.TestCase):
+    def test_extracts_contacts_and_lang(self):
+        html = (b'<html lang="ar"><head><title>t</title></head><body>'
+                b'<a href="mailto:Info@Clinic.com?subject=x">m</a>'
+                b'<a href="https://wa.me/9613123456">w</a><a href="tel:+961 1 234 567">t</a>'
+                b'<a href="https://instagram.com/clinic_x/">ig</a> logo@2x.png</body></html>')
+        server, base = _start_server({"/": (html, 200), "/robots.txt": (b"", 404)})
+        try:
+            r = audit_site(base, check_sitemap=False)
+        finally:
+            server.shutdown()
+        self.assertEqual(r.emails, "info@clinic.com")
+        self.assertEqual(r.whatsapp_number, "9613123456")
+        self.assertEqual(r.phones, "+9611234567")
+        self.assertEqual(r.lang, "ar")
+        self.assertIn("clinic_x", r.instagram)
