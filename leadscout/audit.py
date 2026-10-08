@@ -30,7 +30,7 @@ _PARKED_MARKERS = (
 )
 
 _WHATSAPP_RE = re.compile(r"(wa\.me/|wa\.link/|api\.whatsapp\.com|web\.whatsapp\.com|whatsapp://|whatsapp-chat|joinchat|click-to-chat)", re.I)
-_MAPS_RE = re.compile(r"(google\.[a-z.]+/maps|maps\.app\.goo\.gl|goo\.gl/maps)", re.I)
+_MAPS_RE = re.compile(r"(google\.[a-z.]+/maps|maps\.google\.|maps\.googleapis\.com|maps\.app\.goo\.gl|goo\.gl/maps|g\.page/)", re.I)
 _BOOKING_RE = re.compile(
     r"(calendly\.com|book\.?now|booking\.|fresha\.com|setmore\.com|acuityscheduling\.com|"
     r"squareup\.com/appointments|simplybook\.me|vagaro\.com)", re.I
