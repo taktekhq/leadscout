@@ -9,6 +9,7 @@ policies this module follows.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
@@ -16,7 +17,8 @@ from typing import List, Optional, Sequence
 from . import DEFAULT_USER_AGENT
 from .httpclient import fetch
 
-OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
+# Override with LEADSCOUT_OVERPASS to use a mirror (e.g. https://overpass.kumi.systems/api/interpreter).
+OVERPASS_ENDPOINT = os.environ.get("LEADSCOUT_OVERPASS", "https://overpass-api.de/api/interpreter")
 NOMINATIM_ENDPOINT = "https://nominatim.openstreetmap.org/search"
 
 _TAG_RE = re.compile(r"^([a-zA-Z0-9_:]+)(=(.*))?$")
