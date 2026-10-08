@@ -52,7 +52,18 @@ def fetch(url: str, user_agent: str, timeout: float = 10.0, method: str = "GET",
     start = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CONTEXT) as resp:
-            body = resp.read()
+            # Read in chunks with a total deadline and a size cap: `timeout` alone is
+            # per socket operation, so a server that drips bytes could hang us forever.
+            chunks, size, deadline = [], 0, start + timeout * 3
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > 8_000_000 or time.monotonic() > deadline:
+                    break
+            body = b"".join(chunks)
             elapsed = (time.monotonic() - start) * 1000
             return FetchResult(
                 url=url,
