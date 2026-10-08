@@ -14,7 +14,7 @@ Two jobs:
 2. **Audit a website.** One quick, polite check per site: does it use
    HTTPS, does it have a mobile viewport, a title and meta description,
    `LocalBusiness` structured data, a Google Maps link, a WhatsApp link, a
-   booking link; is it broken or parked; how heavy and slow is it; does it
+   booking link; the contact details the site itself publishes (mailto:/tel:/wa.me, Instagram), its language tag and how much visible text it has (so JS-only shells aren't judged unfairly); is it broken or parked; how heavy and slow is it; does it
    have a `sitemap.xml`. The result is a plain-English list of concrete
    problems — the kind a small business owner can read without a glossary.
 
@@ -95,7 +95,7 @@ leadscout audit-csv --input leads.csv --out audited.csv
 
 Adds the audit columns to each row and writes the merged CSV. `--delay`
 (default 1 second) is the pause between sites — keep it, these are other
-people's servers.
+people's servers. `--workers N` audits N *different* sites in parallel (a given host never sees parallel requests).
 
 ## As a library
 
