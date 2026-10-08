@@ -41,7 +41,7 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A
 _AT_RE = re.compile(r"@")
 _WA_NUM_RE = re.compile(r"(?:wa\.me/|phone=)\+?(\d{7,15})", re.I)
 _BAD_EMAIL_SUFFIX = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
-_BAD_EMAIL_DOMAINS = ("sentry.io", "example.com", "wixpress.com", "domain.com", "email.com")
+_BAD_EMAIL_DOMAINS = ("website.com", "yourdomain.com", "sentry.io", "example.com", "wixpress.com", "domain.com", "email.com")
 
 
 def _find_emails(text: str, links: List[str]) -> List[str]:
