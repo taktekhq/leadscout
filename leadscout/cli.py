@@ -26,10 +26,12 @@ LEAD_FIELDS = ("name", "website", "phone", "email", "address", "city", "country"
                "category", "source", "source_id", "lat", "lon")
 
 AUDIT_FIELDS = (
-    "url", "fetched", "https", "status", "mobile_viewport", "title", "meta_description",
+    "url", "fetched", "https", "https_error", "http_redirects_to_https", "sitemap_robots_http", "status", "mobile_viewport", "title", "meta_description",
     "has_jsonld_localbusiness", "has_maps_link", "has_whatsapp_link", "has_booking_link",
+    "has_contact_form", "pages_checked", "pages_failed", "maps_found_on", "whatsapp_found_on",
+    "booking_found_on", "form_found_on", "jsonld_found_on", "missing_sitewide", "missing_home_only",
     "broken_or_parked", "page_weight_kb", "load_time_ms", "has_sitemap", "robots_disallowed",
-    "lang", "visible_text_chars", "emails", "whatsapp_number", "phones", "instagram", "error", "problems",
+    "lang", "visible_text_chars", "emails", "whatsapp_number", "phones", "instagram", "error", "problems", "notes",
 )
 
 
@@ -62,7 +64,7 @@ def cmd_find_local(args: argparse.Namespace) -> None:
 
 def cmd_audit(args: argparse.Namespace) -> None:
     result = audit_site(args.url, user_agent=args.user_agent, timeout=args.timeout,
-                         check_sitemap=not args.no_sitemap)
+                         check_sitemap=not args.no_sitemap, max_pages=args.max_pages)
     d = result.as_dict()
     if args.out:
         write_csv([d], AUDIT_FIELDS, args.out)
@@ -80,7 +82,7 @@ def cmd_audit_csv(args: argparse.Namespace) -> None:
         i, row = item
         url = row.get("website") or row.get("url") or ""
         result = audit_site(url, user_agent=args.user_agent, timeout=args.timeout,
-                            check_sitemap=not args.no_sitemap)
+                            check_sitemap=not args.no_sitemap, max_pages=args.max_pages)
         if args.delay:
             time.sleep(args.delay)
         merged = dict(row)
@@ -133,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--out", default=None, help="write result as a 1-row CSV instead of printing")
     au.add_argument("--timeout", type=float, default=10.0)
     au.add_argument("--no-sitemap", action="store_true", help="skip the sitemap.xml check")
+    au.add_argument("--max-pages", type=int, default=8, help="pages to check per site, home included (1 = home only)")
     au.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     au.set_defaults(func=cmd_audit)
 
@@ -143,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     ac.add_argument("--delay", type=float, default=1.0, help="seconds to sleep between sites")
     ac.add_argument("--workers", type=int, default=1, help="sites audited in parallel (default 1)")
     ac.add_argument("--no-sitemap", action="store_true")
+    ac.add_argument("--max-pages", type=int, default=8, help="pages to check per site, home included (1 = home only)")
     ac.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     ac.set_defaults(func=cmd_audit_csv)
 

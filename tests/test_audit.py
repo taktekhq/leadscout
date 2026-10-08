@@ -72,7 +72,8 @@ class TestAuditSite(unittest.TestCase):
         self.assertTrue(r.has_sitemap)
         self.assertFalse(r.broken_or_parked)
         # the test server is plain HTTP, so only the HTTPS problem should remain
-        self.assertEqual(r.problems, ["Not using HTTPS, browsers mark it 'Not secure'."])
+        self.assertEqual(len(r.problems), 1)
+        self.assertTrue(r.problems[0].startswith("No valid HTTPS"))
 
     def test_bare_site_reports_every_missing_feature(self):
         server, base = _start_server({

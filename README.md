@@ -18,9 +18,22 @@ Two jobs:
    have a `sitemap.xml`. The result is a plain-English list of concrete
    problems — the kind a small business owner can read without a glossary.
 
-"Polite" means: one request per page, a real `User-Agent` that names the
-tool and links back to this repo, a timeout on every request, and
-`robots.txt` is checked and honored before the page is even fetched.
+The audit is **site-wide, not home-page-only**: it checks the home page plus
+up to 7 same-site pages whose link text or URL looks like contact / booking /
+appointment / reserve / location / find-us / about (and `sitemap.xml` entries
+that match). Maps, WhatsApp, booking-link-or-contact-form and `LocalBusiness`
+data are each reported with *where* they were found (`*_found_on` columns).
+"Missing site-wide" (`missing_sitewide`, worded as a problem) is kept apart from
+"missing on the home page only" (`missing_home_only`, a softer entry in
+`notes`). HTTPS is three separate findings: no valid HTTPS (bad/expired
+certificate or none), `http://` not redirecting to `https://`, and
+`sitemap.xml`/`robots.txt` still pointing at `http://`. Use `--max-pages 1`
+for the old home-page-only behaviour.
+
+"Polite" means: one request per page (at most 8 pages per site, with a short
+pause between them), a real `User-Agent` that names the tool and links back
+to this repo, a timeout on every request, and `robots.txt` is checked and
+honored before any page, inner pages included, is fetched.
 
 ## Install
 

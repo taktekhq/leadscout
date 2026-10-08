@@ -5,9 +5,19 @@ LocalBusiness markup, a Google Maps link, a WhatsApp link, a booking link,
 whether the site looks broken or parked, page weight and load time, and
 whether sitemap.xml exists.
 
-Politeness: one request per resource (home page, robots.txt, sitemap.xml),
-a real User-Agent that names the tool and a contact URL, a timeout on every
-request, and robots.txt is honored before the home page is even fetched.
+Every presence check (Maps, WhatsApp, booking/contact form, structured data)
+is made site-wide: the home page plus a few same-site pages whose link text or
+URL looks like contact / booking / appointment / reserve / location / find-us /
+about (and sitemap entries that match), at most MAX_PAGES in total. Each
+result says where the thing was found, and "missing on the home page only"
+is kept apart from "missing site-wide" so findings can be worded honestly.
+
+HTTPS is three separate questions: is there valid HTTPS at all, does http://
+redirect to https://, and do sitemap.xml / robots.txt still point to http://.
+
+Politeness: one request per resource, a short pause between pages, a real
+User-Agent that names the tool and a contact URL, a timeout on every request,
+and robots.txt is honored before any page is fetched (inner pages included).
 """
 
 from __future__ import annotations
@@ -15,9 +25,10 @@ from __future__ import annotations
 import html.parser
 import json
 import re
+import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 from . import DEFAULT_USER_AGENT
@@ -76,6 +87,11 @@ class _PageParts(html.parser.HTMLParser):
         self.ldjson_blobs: List[str] = []
         self._in_ldjson = False
         self.links: List[str] = []
+        self.anchors: List[tuple] = []  # (href, link text)
+        self._a_href: Optional[str] = None
+        self._a_text: List[str] = []
+        self.has_form = False
+        self._form_fields: List[int] = []  # per open <form>: count of real fields
         self.lang = ""
         self.visible_chars = 0
         self._skip = 0
@@ -98,8 +114,23 @@ class _PageParts(html.parser.HTMLParser):
             self._in_ldjson = True
         elif tag == "a" and attrs_d.get("href"):
             self.links.append(attrs_d["href"])
+            self._a_href, self._a_text = attrs_d["href"], []
+        elif tag == "form":
+            role = (attrs_d.get("role") or "").lower()
+            self._form_fields.append(-100 if role == "search" else 0)
+        elif tag in ("input", "textarea", "select") and self._form_fields:
+            typ = (attrs_d.get("type") or "text").lower()
+            if tag != "input" or typ not in ("hidden", "submit", "button", "search", "image", "reset"):
+                self._form_fields[-1] += 1
+                if tag == "textarea" or self._form_fields[-1] >= 2:
+                    self.has_form = True
 
     def handle_endtag(self, tag):
+        if tag == "a" and self._a_href is not None:
+            self.anchors.append((self._a_href, " ".join("".join(self._a_text).split())))
+            self._a_href = None
+        if tag == "form" and self._form_fields:
+            self._form_fields.pop()
         if tag in ("script", "style", "noscript") and self._skip:
             self._skip -= 1
         if tag == "title":
@@ -110,25 +141,50 @@ class _PageParts(html.parser.HTMLParser):
     def handle_data(self, data):
         if not self._skip:
             self.visible_chars += len(data.strip())
+        if self._a_href is not None:
+            self._a_text.append(data)
         if self._in_title:
             self.title_parts.append(data)
         if self._in_ldjson:
             self.ldjson_blobs.append(data)
 
 
+MAX_PAGES = 8
+PAGE_DELAY = 0.3  # seconds between page fetches on one site
+
+_PAGE_KEYWORDS_RE = re.compile(
+    r"(contact|book|appointment|reserv|location|find[-_ ]?us|about|visit|direction|"
+    r"rendez-vous|nous[-_ ]joindre|a-propos|\u062d\u062c\u0632|\u0627\u062a\u0635\u0644|\u0645\u0648\u0642\u0639)", re.I)
+_SKIP_EXT = (".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".zip", ".doc", ".docx",
+             ".xls", ".xlsx", ".mp4", ".mp3", ".css", ".js", ".xml", ".ico")
+_LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+
+# check key -> (human name, AuditResult attr)
+_CHECKS = {
+    "maps": "Google Maps link",
+    "whatsapp": "WhatsApp link/button",
+    "booking": "online booking link or contact/enquiry form",
+    "jsonld": "LocalBusiness structured data",
+}
+
+
 @dataclass
 class AuditResult:
     url: str
     fetched: bool = False
-    https: bool = False
+    https: bool = False                 # valid HTTPS (kept under the old name)
+    https_error: str = ""
+    http_redirects_to_https: Optional[bool] = None  # None = not checked / unknown
+    sitemap_robots_http: bool = False   # sitemap.xml/robots.txt still point to http://
     status: int = 0
     mobile_viewport: bool = False
     title: str = ""
     meta_description: str = ""
-    has_jsonld_localbusiness: bool = False
+    has_jsonld_localbusiness: bool = False   # anywhere on the pages checked
     has_maps_link: bool = False
     has_whatsapp_link: bool = False
     has_booking_link: bool = False
+    has_contact_form: bool = False
     broken_or_parked: bool = False
     page_weight_kb: float = 0.0
     load_time_ms: float = 0.0
@@ -140,33 +196,171 @@ class AuditResult:
     phones: str = ""
     instagram: str = ""
     robots_disallowed: bool = False
+    pages_checked: List[str] = field(default_factory=list)
+    pages_failed: List[str] = field(default_factory=list)
+    found_on: Dict[str, List[str]] = field(default_factory=dict)  # check -> page paths
+    missing_sitewide: List[str] = field(default_factory=list)     # absent on every page checked
+    missing_home_only: List[str] = field(default_factory=list)    # absent on home, present elsewhere
     error: str = ""
-    problems: List[str] = field(default_factory=list)
+    problems: List[str] = field(default_factory=list)  # real gaps, worded by scope
+    notes: List[str] = field(default_factory=list)     # softer findings ("only on /contact")
 
     def as_dict(self) -> dict:
         d = dict(self.__dict__)
         d["problems"] = "; ".join(self.problems)
+        d["notes"] = "; ".join(self.notes)
+        d["pages_checked"] = " ".join(self.pages_checked)
+        d["pages_failed"] = " ".join(self.pages_failed)
+        d["missing_sitewide"] = ",".join(self.missing_sitewide)
+        d["missing_home_only"] = ",".join(self.missing_home_only)
+        found = d.pop("found_on")
+        for k in ("maps", "whatsapp", "booking", "form", "jsonld"):
+            d[f"{k}_found_on"] = " ".join(found.get(k, []))
+        d["http_redirects_to_https"] = "" if self.http_redirects_to_https is None else self.http_redirects_to_https
         return d
 
 
+class _Robots:
+    """robots.txt per origin: rules for can_fetch plus any Sitemap: lines."""
+
+    def __init__(self, user_agent: str, timeout: float):
+        self.ua, self.timeout = user_agent, timeout
+        self._cache: Dict[str, tuple] = {}
+
+    def _load(self, origin: str):
+        if origin not in self._cache:
+            rp = urllib.robotparser.RobotFileParser()
+            res = fetch(origin + "/robots.txt", user_agent=self.ua, timeout=self.timeout)
+            lines = res.text().splitlines() if res.status == 200 else []
+            if res.status == 200:
+                rp.parse(lines)
+            sitemaps = [ln.split(":", 1)[1].strip() for ln in lines if ln.lower().startswith("sitemap:")]
+            self._cache[origin] = (res.status == 200, rp, sitemaps)
+        return self._cache[origin]
+
+    def allows(self, url: str) -> bool:
+        p = urlparse(url)
+        present, rp, _ = self._load(f"{p.scheme}://{p.netloc}")
+        return rp.can_fetch(self.ua, url) if present else True  # no robots.txt = no restriction
+
+    def sitemaps(self, url: str) -> List[str]:
+        p = urlparse(url)
+        return self._load(f"{p.scheme}://{p.netloc}")[2]
+
+
 def _robots_allows(base_url: str, user_agent: str, timeout: float) -> bool:
-    parsed = urlparse(base_url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    rp = urllib.robotparser.RobotFileParser()
-    result = fetch(robots_url, user_agent=user_agent, timeout=timeout)
-    if result.status == 200:
-        rp.parse(result.text().splitlines())
-    else:
-        return True  # no robots.txt (or unreachable) means no restriction
-    return rp.can_fetch(user_agent, base_url)
+    return _Robots(user_agent, timeout).allows(base_url)
 
 
 def _looks_parked(text_lower: str) -> bool:
     return any(marker in text_lower for marker in _PARKED_MARKERS)
 
 
+def _host(url: str) -> str:
+    h = urlparse(url).netloc.lower()
+    return h[4:] if h.startswith("www.") else h
+
+
+def _path(url: str) -> str:
+    p = urlparse(url)
+    return (p.path or "/") + (("?" + p.query) if p.query else "")
+
+
+def _candidate_pages(home_url: str, anchors: List[tuple], sitemap_urls: List[str]) -> List[str]:
+    """Same-site URLs worth a look: home-page links first, then sitemap entries."""
+    base_host = _host(home_url)
+    home_key = home_url.rstrip("/")
+    out: List[str] = []
+    seen = {home_key}
+
+    def consider(raw: str, text: str):
+        raw = (raw or "").strip()
+        if not raw or raw.lower().startswith(("mailto:", "tel:", "javascript:", "#", "sms:", "whatsapp:")):
+            return
+        full = urljoin(home_url, raw).split("#", 1)[0]
+        p = urlparse(full)
+        if p.scheme not in ("http", "https") or _host(full) != base_host:
+            return
+        if p.path.lower().endswith(_SKIP_EXT):
+            return
+        if not (_PAGE_KEYWORDS_RE.search(p.path) or _PAGE_KEYWORDS_RE.search(text or "")):
+            return
+        key = full.rstrip("/")
+        if key in seen:
+            return
+        seen.add(key)
+        # fetch over the scheme/host the home page actually answered on
+        h = urlparse(home_url)
+        out.append(f"{h.scheme}://{h.netloc}{p.path or '/'}" + (f"?{p.query}" if p.query else ""))
+
+    for href, text in anchors:
+        consider(href, text)
+    for u in sitemap_urls:
+        consider(u, "")
+    return out
+
+
+def _sitemap_locs(urls: List[str], ua: str, timeout: float, max_children: int = 2) -> tuple:
+    """(exists, [page urls]) from sitemap.xml and any robots-declared sitemaps."""
+    exists, locs, fetched = False, [], 0
+    queue = list(urls)
+    done = set()
+    while queue and fetched < 3:
+        u = queue.pop(0)
+        if u in done:
+            continue
+        done.add(u)
+        sm = fetch(u, user_agent=ua, timeout=timeout)
+        fetched += 1
+        if sm.status != 200 or b"<" not in sm.body[:50]:
+            continue
+        exists = True
+        body = sm.text()
+        found = _LOC_RE.findall(body)
+        if "<sitemapindex" in body.lower():
+            # index: look inside the children most likely to hold pages
+            kids = [f for f in found if "page" in f.lower()] + [f for f in found if "page" not in f.lower()]
+            queue += kids[:max_children]
+        else:
+            locs += found
+    return exists, locs
+
+
+def _scan_page(text: str, parser: "_PageParts") -> Dict[str, bool]:
+    # also scan raw HTML so e.g. onclick-only buttons still count
+    def hit(rx):
+        return bool(rx.search(text)) or any(rx.search(h) for h in parser.links)
+    jsonld = False
+    for blob in parser.ldjson_blobs:
+        try:
+            data = json.loads(blob)
+        except Exception:
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            c = stack.pop()
+            if isinstance(c, dict):
+                t = c.get("@type", "")
+                types = t if isinstance(t, list) else [t]
+                if any("LocalBusiness" in str(x) or str(x) in _LOCAL_BUSINESS_SUBTYPES for x in types):
+                    jsonld = True
+                g = c.get("@graph")
+                if isinstance(g, list):
+                    stack += g
+    return {
+        "maps": hit(_MAPS_RE), "whatsapp": hit(_WHATSAPP_RE), "booking": hit(_BOOKING_RE),
+        "form": parser.has_form, "jsonld": jsonld,
+    }
+
+
+def _is_cert_problem(err: str) -> bool:
+    e = (err or "").lower()
+    return "certificate" in e or "ssl" in e or "tls" in e
+
+
 def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 10.0,
-               check_sitemap: bool = True) -> AuditResult:
+               check_sitemap: bool = True, max_pages: int = MAX_PAGES,
+               page_delay: float = PAGE_DELAY) -> AuditResult:
     """Audit one business website. Never raises; failures show up in .error/.problems."""
     if not url:
         r = AuditResult(url=url, error="no url given")
@@ -177,13 +371,22 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
         url = "https://" + url
 
     r = AuditResult(url=url)
+    robots = _Robots(user_agent, timeout)
 
-    if not _robots_allows(url, user_agent, timeout):
+    if not robots.allows(url):
         r.robots_disallowed = True
         r.problems.append("robots.txt disallows automated checks; skipped the audit out of respect.")
         return r
 
     result = fetch(url, user_agent=user_agent, timeout=timeout)
+    start_scheme = urlparse(url).scheme
+    if (result.error or result.status == 0) and start_scheme == "https":
+        # Is it down, or is it only HTTPS that is broken (bad/expired certificate)?
+        https_err = result.error or "no response"
+        plain = fetch("http://" + urlparse(url).netloc + (urlparse(url).path or "/"),
+                      user_agent=user_agent, timeout=timeout)
+        if plain.status and not plain.error:
+            result, r.https_error = plain, https_err
     r.load_time_ms = round(result.elapsed_ms, 1)
     r.status = result.status
 
@@ -194,8 +397,33 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
         return r
 
     r.fetched = True
-    r.https = urlparse(result.final_url).scheme == "https"
+    home_url = result.final_url
+    final_scheme = urlparse(home_url).scheme
     r.page_weight_kb = round(len(result.body) / 1024, 1)
+
+    # --- HTTPS, as three separate questions --------------------------------
+    host_part = urlparse(home_url).netloc
+    if final_scheme == "https":
+        r.https = True
+        if start_scheme == "http":
+            r.http_redirects_to_https = True
+        else:
+            plain = fetch("http://" + host_part + "/", user_agent=user_agent, timeout=timeout)
+            if plain.status and not plain.error:
+                r.http_redirects_to_https = urlparse(plain.final_url).scheme == "https"
+    elif not r.https_error:
+        # Landed on http (given as http, or an http redirect target): does https exist at all?
+        probe = fetch("https://" + host_part + "/", user_agent=user_agent, timeout=timeout)
+        if probe.status and not probe.error:
+            r.https = True
+            r.http_redirects_to_https = False
+        else:
+            r.https_error = probe.error or "no response on https"
+
+    if not robots.allows(home_url):
+        r.fetched, r.robots_disallowed = False, True
+        r.problems.append("robots.txt disallows automated checks; skipped the audit out of respect.")
+        return r
 
     if result.status >= 400:
         r.broken_or_parked = True
@@ -217,71 +445,125 @@ def audit_site(url: str, user_agent: str = DEFAULT_USER_AGENT, timeout: float = 
     r.title = "".join(parser.title_parts).strip()
     r.meta_description = parser.meta_description.strip()
     r.mobile_viewport = parser.has_viewport
-
-    for blob in parser.ldjson_blobs:
-        try:
-            data = json.loads(blob)
-        except Exception:
-            continue
-        candidates = data if isinstance(data, list) else [data]
-        for c in candidates:
-            if isinstance(c, dict):
-                t = c.get("@type", "")
-                types = t if isinstance(t, list) else [t]
-                if any("LocalBusiness" in str(x) or str(x) in _LOCAL_BUSINESS_SUBTYPES for x in types):
-                    r.has_jsonld_localbusiness = True
-
     r.lang = parser.lang
     r.visible_text_chars = parser.visible_chars
     if "under maintenance" in text_lower or "coming soon" in r.title.lower():
         r.broken_or_parked = True
         r.problems.append("Site shows an under-maintenance / coming-soon page.")
-    r.emails = ", ".join(_find_emails(text, parser.links))
-    wa = _WA_NUM_RE.search(text)
-    r.whatsapp_number = wa.group(1) if wa else ""
-    tels = []
-    for href in parser.links:
-        if href.lower().startswith("tel:"):
-            t = re.sub(r"[^\d+]", "", href[4:])
-            if t and t not in tels:
-                tels.append(t)
-    r.phones = ", ".join(tels[:3])
-    ig = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", text)
-    if ig and ig.group(1).lower() not in ("p", "explore", "accounts", "reel", "sharer"):
-        r.instagram = "https://www.instagram.com/" + ig.group(1)
 
-    all_text_for_links = text  # also scan raw HTML so e.g. onclick-only buttons still count
-    r.has_whatsapp_link = bool(_WHATSAPP_RE.search(all_text_for_links)) or any(
-        _WHATSAPP_RE.search(href) for href in parser.links
-    )
-    r.has_maps_link = bool(_MAPS_RE.search(all_text_for_links)) or any(
-        _MAPS_RE.search(href) for href in parser.links
-    )
-    r.has_booking_link = bool(_BOOKING_RE.search(all_text_for_links)) or any(
-        _BOOKING_RE.search(href) for href in parser.links
-    )
-
+    # --- sitemap / robots (also feeds the crawl) ---------------------------
+    sitemap_pages: List[str] = []
     if check_sitemap and not r.broken_or_parked:
-        sitemap_url = urljoin(result.final_url, "/sitemap.xml")
-        sm = fetch(sitemap_url, user_agent=user_agent, timeout=timeout)
-        r.has_sitemap = sm.status == 200 and b"<" in sm.body[:50]
+        origin = f"{urlparse(home_url).scheme}://{host_part}"
+        r.has_sitemap, sitemap_pages = _sitemap_locs(
+            [origin + "/sitemap.xml"] + robots.sitemaps(home_url), user_agent, timeout)
+        if r.https:
+            declared = robots.sitemaps(home_url)
+            http_prefix = "http://" + _host(home_url)
+            if any(d.lower().startswith(("http://" + _host(home_url), "http://www." + _host(home_url)))
+                   for d in declared) or any(
+                    u.lower().startswith((http_prefix, "http://www." + _host(home_url)))
+                    for u in sitemap_pages[:50]):
+                r.sitemap_robots_http = True
+
+    # --- pages: home + a few contact/booking/location-style pages ----------
+    pages = [(home_url, text, parser)]
+    r.pages_checked.append(_path(home_url))
+    if not r.broken_or_parked and max_pages > 1:
+        for cand in _candidate_pages(home_url, parser.anchors, sitemap_pages)[: max_pages - 1]:
+            if not robots.allows(cand):
+                continue
+            if page_delay:
+                time.sleep(page_delay)
+            res = fetch(cand, user_agent=user_agent, timeout=timeout)
+            ctype = (res.headers.get("Content-Type") or res.headers.get("content-type") or "").lower()
+            if res.error or res.status >= 400 or (ctype and "html" not in ctype):
+                r.pages_failed.append(_path(cand))
+                continue
+            sub = _PageParts()
+            try:
+                sub.feed(res.text())
+            except Exception:
+                pass
+            pages.append((res.final_url, res.text(), sub))
+            r.pages_checked.append(_path(res.final_url))
+
+    found: Dict[str, List[str]] = {k: [] for k in ("maps", "whatsapp", "booking", "form", "jsonld")}
+    emails, tels = [], []
+    for page_url, page_text, sub in pages:
+        path = _path(page_url)
+        for k, v in _scan_page(page_text, sub).items():
+            if v:
+                found[k].append(path)
+        emails += _find_emails(page_text, sub.links)
+        for href in sub.links:
+            if href.lower().startswith("tel:"):
+                t = re.sub(r"[^\d+]", "", href[4:])
+                if t and t not in tels:
+                    tels.append(t)
+    r.found_on = {k: v for k, v in found.items() if v}
+    r.has_jsonld_localbusiness = bool(found["jsonld"])
+    r.has_maps_link = bool(found["maps"])
+    r.has_whatsapp_link = bool(found["whatsapp"])
+    r.has_booking_link = bool(found["booking"])
+    r.has_contact_form = bool(found["form"])
+    dedup = []
+    for e in emails:
+        if e not in dedup:
+            dedup.append(e)
+    r.emails = ", ".join(dedup[:3])
+    r.phones = ", ".join(tels[:3])
+    for _, page_text, _sub in pages:
+        wa = _WA_NUM_RE.search(page_text)
+        if wa:
+            r.whatsapp_number = wa.group(1)
+            break
+    for _, page_text, _sub in pages:
+        ig = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", page_text)
+        if ig and ig.group(1).lower() not in ("p", "explore", "accounts", "reel", "sharer"):
+            r.instagram = "https://www.instagram.com/" + ig.group(1)
+            break
+
+    # --- findings, worded by scope -----------------------------------------
+    n = len(pages)
+    where = ("the home page (no contact/booking/location pages were found to check)" if n == 1
+             else f"any of the {n} pages checked ({', '.join(r.pages_checked)})")
+    home_path = _path(home_url)
+    present = {
+        "maps": found["maps"], "whatsapp": found["whatsapp"], "jsonld": found["jsonld"],
+        "booking": sorted(set(found["booking"]) | set(found["form"]), key=(found["booking"] + found["form"]).index),
+    }
+    advice = {
+        "maps": "makes it harder for customers to find the physical location.",
+        "whatsapp": "customers in this market expect one-tap WhatsApp contact.",
+        "booking": "customers must call during business hours to book.",
+        "jsonld": "Google/AI assistants can't read hours/address/phone directly.",
+    }
+    for key, label in _CHECKS.items():
+        locs = present[key]
+        if not locs:
+            r.missing_sitewide.append(key)
+            r.problems.append(f"No {label} on {where}, {advice[key]}")
+        elif home_path not in locs:
+            r.missing_home_only.append(key)
+            r.notes.append(f"No {label} on the home page, but found on {', '.join(locs)}.")
 
     if not r.https:
-        r.problems.append("Not using HTTPS, browsers mark it 'Not secure'.")
+        why = f" ({r.https_error})" if r.https_error else ""
+        r.problems.append(f"No valid HTTPS{why}, browsers mark it 'Not secure' or block it.")
+    else:
+        if r.http_redirects_to_https is False:
+            r.problems.append("HTTPS works, but http:// does not redirect to https://, so old links and typed "
+                              "addresses land on the 'Not secure' version.")
+        if r.sitemap_robots_http:
+            r.problems.append("sitemap.xml/robots.txt still point to http:// URLs, search engines are told "
+                              "to index the insecure version.")
     if not r.mobile_viewport:
         r.problems.append("No mobile viewport tag, the site will look broken on phones.")
     if not r.title:
         r.problems.append("No <title>, hurts how the site shows up in search and when shared.")
     if not r.meta_description:
-        r.problems.append("No meta description, search engines show a random snippet instead.")
-    if not r.has_jsonld_localbusiness:
-        r.problems.append("No LocalBusiness structured data, so Google/AI assistants can't read hours/address/phone directly.")
-    if not r.has_maps_link:
-        r.problems.append("No Google Maps link, makes it harder for customers to find the physical location.")
-    if not r.has_whatsapp_link:
-        r.problems.append("No WhatsApp link/button, customers in this market expect one-tap WhatsApp contact.")
-    if not r.has_booking_link:
-        r.problems.append("No online booking link, customers must call during business hours to book.")
+        r.problems.append("No meta description on the home page, search engines show a random snippet instead.")
     if not r.has_sitemap and check_sitemap and not r.broken_or_parked:
         r.problems.append("No sitemap.xml, can slow down how fully search engines index the site.")
     if r.load_time_ms > 3000:
